@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}img{max-width:100%}</style>
+</head>
+<body>
+<title>Note Listener</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Sing or play a note and see its name, octave, cents and frequency. Check your vocal range and find the right karaoke key. Runs in your browser; nothing is uploaded.">
+<style>
+/* Layout: one phone-width column of instrument panels; the big note readout leads, tools follow. */
+:root {
+  --bg: #f3f4f7;
+  --panel: #ffffff;
+  --fg: #171b2e;
+  --muted: #5d6378;
+  --line: #dfe2ea;
+  --accent: #a3203a;      /* velvet red */
+  --accent-soft: #f6e3e7;
+  --good: #1d7a4f;
+  --warn: #a8620b;
+  --needle: #171b2e;
+  --font-display: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --font-body: -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11131b; --panel: #1a1d28; --fg: #eceef5; --muted: #9aa0b4; --line: #2c3042;
+    --accent: #e8566f; --accent-soft: #3a1e27; --good: #4cc58d; --warn: #e3a447; --needle: #eceef5;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11131b; --panel: #1a1d28; --fg: #eceef5; --muted: #9aa0b4; --line: #2c3042;
+  --accent: #e8566f; --accent-soft: #3a1e27; --good: #4cc58d; --warn: #e3a447; --needle: #eceef5;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+}
+main { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+header h1 { font-family: var(--font-display); font-weight: 700; font-size: 1.6rem; margin: 0; letter-spacing: -0.01em; }
+header p { margin: 4px 0 0; color: var(--muted); font-size: 0.95rem; }
+section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+h2 { font-family: var(--font-display); font-size: 1.05rem; font-weight: 600; margin: 0; text-wrap: balance; }
+.eyebrow { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+p { margin: 0; }
+.hint { color: var(--muted); font-size: 0.9rem; }
+button, .filebtn {
+  font: inherit; font-weight: 600; font-size: 0.95rem; border-radius: 10px; padding: 11px 14px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel); color: var(--fg); min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-align: center;
+}
+button.primary, .filebtn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:focus-visible, .filebtn:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.row > * { flex: 1 1 140px; }
+.filebtn input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.filebtn { position: relative; }
+
+/* Readout */
+.readout { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 8px; }
+.note { font-family: var(--font-display); font-weight: 700; font-size: clamp(4.5rem, 24vw, 7rem); line-height: 0.9; letter-spacing: -0.03em; }
+.note sub { font-size: 0.38em; font-weight: 600; vertical-align: baseline; margin-left: 2px; color: var(--muted); }
+.note.idle { color: var(--line); }
+.numbers { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; }
+.numbers .cents { font-size: 1.5rem; font-weight: 600; }
+.numbers .hz { color: var(--muted); font-size: 0.95rem; }
+.cents.good { color: var(--good); } .cents.off { color: var(--warn); }
+.meter { position: relative; height: 34px; border-radius: 8px; background: linear-gradient(90deg, var(--accent-soft), transparent 40%, transparent 60%, var(--accent-soft)); border: 1px solid var(--line); overflow: hidden; }
+.meter .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.meter .tick.mid { background: var(--good); width: 2px; }
+.meter .needle { position: absolute; top: 4px; bottom: 4px; width: 4px; border-radius: 2px; background: var(--needle); left: 50%; transform: translateX(-50%); transition: left 80ms linear; }
+.meter-labels { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); margin-top: -6px; }
+.status { font-size: 0.9rem; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--fg); }
+.status[data-kind="ok"] { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+
+/* Notes log */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-family: var(--font-mono); font-size: 0.85rem; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); font-variant-numeric: tabular-nums; }
+.chip b { font-family: var(--font-display); font-weight: 600; }
+.chip small { color: var(--muted); margin-left: 4px; }
+.empty { color: var(--muted); font-size: 0.9rem; font-style: italic; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 0.95rem; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+canvas.trail { width: 100%; height: 150px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); display: block; }
+
+/* Range steps */
+ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+ol.steps li { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: start; }
+ol.steps li.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+ol.steps .label { font-weight: 600; }
+ol.steps .what { grid-column: 1 / -1; color: var(--muted); font-size: 0.88rem; }
+ol.steps .val { font-family: var(--font-display); font-weight: 700; font-size: 1.35rem; text-align: right; }
+ol.steps .val.none { color: var(--line); }
+ol.steps .row { grid-column: 1 / -1; }
+.result { border-radius: 12px; padding: 14px; background: var(--bg); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.result .big { font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; }
+.keys { width: 100%; height: 46px; display: block; }
+.note-small { font-size: 0.8rem; color: var(--muted); }
+.copybox { width: 100%; min-height: 90px; font-family: var(--font-mono); font-size: 0.8rem; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 10px; }
+@media (prefers-reduced-motion: reduce) { .meter .needle { transition: none; } }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">Rustin Cole Music · tools</div>
+    <h1>Note Listener</h1>
+    <p>Sing or play a note. It names the note with its octave, how many cents sharp or flat you are, and the frequency. Works for voice, guitar and piano.</p>
+  </header>
+
+  <!-- LIVE -->
+  <section class="panel" id="live" aria-labelledby="live-h">
+    <h2 id="live-h">Listen live</h2>
+    <div class="readout" aria-live="polite">
+      <div class="note idle" id="noteBig">A<sub>4</sub></div>
+      <div class="numbers">
+        <span class="cents" id="centsTxt">±0¢</span>
+        <span class="hz" id="hzTxt">440.0 Hz</span>
+      </div>
+    </div>
+    <div class="meter" id="meter" aria-hidden="true">
+      <span class="tick" style="left:10%"></span><span class="tick" style="left:30%"></span>
+      <span class="tick mid" style="left:50%"></span>
+      <span class="tick" style="left:70%"></span><span class="tick" style="left:90%"></span>
+      <span class="needle" id="needle"></span>
+    </div>
+    <div class="meter-labels" aria-hidden="true"><span>−50¢ flat</span><span>in tune</span><span>sharp +50¢</span></div>
+    <div class="row">
+      <button class="primary" id="liveBtn" type="button">Start listening</button>
+    </div>
+    <p class="status" id="liveStatus" data-kind="ok">Tap Start, allow the microphone, then sing or play one note at a time. Notes you hold for a moment are added to Your notes below.</p>
+  </section>
+
+  <!-- RECORDING -->
+  <section class="panel" id="clip" aria-labelledby="clip-h">
+    <h2 id="clip-h">Read a recording</h2>
+    <p class="hint">On iPhone, Record a clip opens the camera: point it anywhere and sing or play. Only the sound is used. You can also pick a Voice Memo or any audio file.</p>
+    <div class="row">
+      <label class="filebtn primary" for="clipRecord">Record a clip<input id="clipRecord" type="file" accept="video/*" capture="user"></label>
+      <label class="filebtn" for="clipPick">Choose a file<input id="clipPick" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.caf,.mov,.mp4"></label>
+    </div>
+    <p class="status" id="clipStatus" data-kind="ok">Example below: a short phrase, so you can see what a reading looks like.</p>
+    <div id="clipResult">
+      <canvas class="trail" id="trail" aria-label="Pitch over time"></canvas>
+    </div>
+    <dl class="facts" id="clipFacts"></dl>
+  </section>
+
+  <!-- NOTES LOG -->
+  <section class="panel" id="log" aria-labelledby="log-h">
+    <h2 id="log-h">Your notes</h2>
+    <div class="chips" id="chips"><span class="empty">Held notes show up here.</span></div>
+    <div class="row">
+      <button class="primary" id="sendBtn" type="button" hidden>Send to Claude</button>
+      <button id="copyBtn" type="button">Copy notes</button>
+      <button id="shareBtn" type="button" hidden>Share</button>
+      <button id="clearBtn" type="button">Clear</button>
+    </div>
+    <p class="hint" id="sendNote" aria-live="polite"></p>
+    <textarea class="copybox" id="copyBox" readonly hidden aria-label="Notes text to copy"></textarea>
+  </section>
+
+  <!-- RANGE CHECK -->
+  <section class="panel" id="range" aria-labelledby="range-h">
+    <h2 id="range-h">Range check</h2>
+    <p class="hint">About two minutes. Warm up first. For each step, hold the note for one or two seconds; slides and cracks are ignored. Use live listening or record a clip for each step. Skip any step you like.</p>
+    <ol class="steps" id="steps"></ol>
+    <div class="result" id="rangeResult"></div>
+    <div class="row">
+      <button id="rangeClear" type="button">Start the range check over</button>
+    </div>
+  </section>
+
+  <section class="panel" id="get" aria-labelledby="get-h" hidden>
+    <h2 id="get-h">Take it with you</h2>
+    <p class="hint">Saves a copy of this tool as one file. Open it in Chrome on your Mac to listen live, or follow the Mac setup notes Claude gave you.</p>
+    <div class="row"><button id="dlBtn" type="button">Download a copy</button></div>
+    <p class="hint" id="dlNote" aria-live="polite"></p>
+  </section>
+
+  <p class="note-small">Pitch: YIN detection on a 22 kHz signal, A4 = 440 Hz. Chord and voice-type readings are rough guides. Everything runs on this device: sound and notes are never uploaded, and your notes and range are saved only in this browser.</p>
+</main>
+
+<input type="file" id="stepClip" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.caf,.mov,.mp4" hidden>
+
+<script>
+// ---- Pitch core (pure functions, no DOM) ----
+var NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+function freqToMidi(f) { return 69 + 12 * Math.log2(f / 440); }
+function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+function midiName(m) { var r = Math.round(m); return NOTE_NAMES[((r % 12) + 12) % 12] + (Math.floor(r / 12) - 1); }
+function noteInfo(f) {
+  var m = freqToMidi(f), r = Math.round(m);
+  return { freq: f, midi: r, name: midiName(r), cents: Math.round((m - r) * 100) };
+}
+
+function rms(buf) { var s = 0; for (var i = 0; i < buf.length; i++) s += buf[i] * buf[i]; return Math.sqrt(s / buf.length); }
+
+// YIN pitch detector. Returns {freq, clarity} or null.
+function yin(buf, sr, minF, maxF) {
+  minF = minF || 50; maxF = maxF || 1600;
+  var n = buf.length, half = Math.floor(n / 2);
+  var tauMin = Math.max(2, Math.floor(sr / maxF)), tauMax = Math.min(half - 1, Math.ceil(sr / minF));
+  var d = new Float32Array(tauMax + 2);
+  for (var tau = 1; tau <= tauMax + 1; tau++) {
+    var sum = 0;
+    for (var i = 0; i < half; i++) { var x = buf[i] - buf[i + tau]; sum += x * x; }
+    d[tau] = sum;
+  }
+  // cumulative mean normalized difference
+  var cm = new Float32Array(tauMax + 2); cm[0] = 1; var run = 0;
+  for (tau = 1; tau <= tauMax + 1; tau++) { run += d[tau]; cm[tau] = run > 0 ? d[tau] * tau / run : 1; }
+  var thr = 0.15, best = -1;
+  for (tau = tauMin; tau <= tauMax; tau++) {
+    if (cm[tau] < thr) { while (tau + 1 <= tauMax && cm[tau + 1] < cm[tau]) tau++; best = tau; break; }
+  }
+  if (best < 0) { // fall back to global minimum if it is reasonably clear
+    var mv = 1e9;
+    for (tau = tauMin; tau <= tauMax; tau++) if (cm[tau] < mv) { mv = cm[tau]; best = tau; }
+    if (mv > 0.35) return null;
+  }
+  var t = best;
+  var x0 = t > 1 ? cm[t - 1] : cm[t], x2 = t + 1 < cm.length ? cm[t + 1] : cm[t];
+  var denom = x0 - 2 * cm[t] + x2, shift = denom !== 0 ? 0.5 * (x0 - x2) / denom : 0;
+  if (Math.abs(shift) > 1) shift = 0;
+  var f = sr / (t + shift);
+  if (f < minF || f > maxF) return null;
+  return { freq: f, clarity: Math.max(0, 1 - cm[t]) };
+}
+
+// Turns a stream of frames [{t, midiFloat|null}] into held notes.
+// A held note: same rounded semitone for at least minDur seconds.
+function segmentNotes(frames, hop, minDur) {
+  minDur = minDur || 0.2;
+  var out = [], cur = null;
+  function close() {
+    if (cur && cur.n * hop >= minDur) {
+      var avg = cur.sum / cur.n, r = Math.round(avg);
+      out.push({ midi: r, name: midiName(r), cents: Math.round((avg - r) * 100), start: cur.start, dur: cur.n * hop, freq: midiToFreq(avg) });
+    }
+    cur = null;
+  }
+  var gap = 0;
+  for (var i = 0; i < frames.length; i++) {
+    var fr = frames[i];
+    if (fr.m == null) { gap++; if (gap > 2) close(); continue; }
+    var r = Math.round(fr.m);
+    if (cur && r === cur.midi) { cur.n++; cur.sum += fr.m; gap = 0; }
+    else if (cur && Math.abs(fr.m - cur.sum / cur.n) < 0.7 && gap === 0) { cur.n++; cur.sum += fr.m; } // vibrato tolerance
+    else { close(); cur = { midi: r, n: 1, sum: fr.m, start: fr.t }; gap = 0; }
+  }
+  close();
+  // merge neighbours that are the same note (split by a dropout)
+  var merged = [];
+  for (i = 0; i < out.length; i++) {
+    var p = merged[merged.length - 1];
+    if (p && p.midi === out[i].midi && out[i].start - (p.start + p.dur) < 0.15) { p.dur = out[i].start + out[i].dur - p.start; }
+    else merged.push(out[i]);
+  }
+  return merged;
+}
+
+// Analyse a whole mono signal (Float32Array) -> {frames, notes}
+// Cheap downsampling to ~16 kHz (two passes of a moving average, then pick every k-th sample).
+function decimate(sig, sr, target) {
+  var k = Math.max(1, Math.floor(sr / (target || 16000)));
+  if (k === 1) return { sig: sig, sr: sr };
+  var n = Math.floor(sig.length / k), out = new Float32Array(n), a = new Float32Array(sig.length), acc = 0, i;
+  for (i = 0; i < sig.length; i++) { acc += sig[i]; if (i >= k) acc -= sig[i - k]; a[i] = acc / k; }
+  acc = 0; var b = new Float32Array(sig.length);
+  for (i = 0; i < a.length; i++) { acc += a[i]; if (i >= k) acc -= a[i - k]; b[i] = acc / k; }
+  for (i = 0; i < n; i++) out[i] = b[i * k + k - 1];
+  return { sig: out, sr: sr / k };
+}
+
+function analyseSignal(sig0, sr0, opts) {
+  opts = opts || {};
+  var dd = decimate(sig0, sr0, 22000), sig = dd.sig, sr = dd.sr;
+  var win = 1024, hop = 352, frames = [];
+  var buf = new Float32Array(win);
+  var peak = 0; for (var k = 0; k < sig.length; k++) { var a = Math.abs(sig[k]); if (a > peak) peak = a; }
+  var gate = Math.max(0.005, peak * 0.06);
+  for (var s = 0; s + win <= sig.length; s += hop) {
+    for (var j = 0; j < win; j++) buf[j] = sig[s + j];
+    var m = null;
+    if (rms(buf) > gate) {
+      var p = yin(buf, sr, opts.minF, opts.maxF);
+      if (p && p.clarity > 0.8) m = freqToMidi(p.freq);
+    }
+    frames.push({ t: s / sr, m: m });
+  }
+  return { frames: frames, notes: segmentNotes(frames, hop / sr, opts.minDur || 0.2) };
+}
+
+// ---- Chord guess from a magnitude spectrum (approximate) ----
+var CHORDS = [
+  ["", [0, 4, 7]], ["m", [0, 3, 7]], ["7", [0, 4, 7, 10]], ["maj7", [0, 4, 7, 11]], ["m7", [0, 3, 7, 10]],
+  ["sus2", [0, 2, 7]], ["sus4", [0, 5, 7]], ["dim", [0, 3, 6]], ["aug", [0, 4, 8]], ["5", [0, 7]], ["6", [0, 4, 7, 9]], ["m6", [0, 3, 7, 9]], ["add9", [0, 2, 4, 7]]
+];
+function chromaFromSpectrum(mag, sr, fftSize) {
+  var c = new Float32Array(12), bin = sr / fftSize;
+  for (var i = 1; i < mag.length; i++) {
+    var f = i * bin; if (f < 70 || f > 2100) continue;
+    var v = mag[i]; if (v <= 0) continue;
+    var m = freqToMidi(f), r = Math.round(m);
+    if (Math.abs(m - r) > 0.35) continue;
+    c[((r % 12) + 12) % 12] += v * v;
+  }
+  return c;
+}
+function guessChord(chroma) {
+  var tot = 0, i; for (i = 0; i < 12; i++) tot += chroma[i];
+  if (tot <= 0) return null;
+  var c = []; for (i = 0; i < 12; i++) c.push(chroma[i] / tot);
+  var best = null;
+  for (var root = 0; root < 12; root++) for (var k = 0; k < CHORDS.length; k++) {
+    var ivs = CHORDS[k][1], inS = 0, set = {};
+    ivs.forEach(function (iv) { var pc = (root + iv) % 12; set[pc] = 1; inS += c[pc]; });
+    var out = 1 - inS, minTone = 1;
+    ivs.forEach(function (iv) { minTone = Math.min(minTone, c[(root + iv) % 12]); });
+    // reward coverage, punish energy outside the chord and missing tones, slight bias to simpler chords
+    var score = inS - 0.6 * out + 0.8 * Math.min(minTone * ivs.length, 0.5) - 0.02 * ivs.length + (root === strongest(c) ? 0.05 : 0);
+    if (!best || score > best.score) best = { score: score, name: NOTE_NAMES[root] + CHORDS[k][0], root: NOTE_NAMES[root], quality: CHORDS[k][0] };
+  }
+  var top = c.map(function (v, idx) { return [v, idx]; }).sort(function (a, b) { return b[0] - a[0]; })
+    .filter(function (x) { return x[0] > 0.06; }).slice(0, 5).map(function (x) { return NOTE_NAMES[x[1]]; });
+  best.notes = top;
+  return best;
+}
+function strongest(c) { var b = 0; for (var i = 1; i < 12; i++) if (c[i] > c[b]) b = i; return b; }
+
+// ---- Voice type (rough guide) from a range in MIDI numbers ----
+var VOICE_TYPES = [
+  { name: "Bass", lo: 40, hi: 64 },        // E2-E4
+  { name: "Baritone", lo: 45, hi: 69 },    // A2-A4
+  { name: "Tenor", lo: 48, hi: 72 },       // C3-C5
+  { name: "Countertenor", lo: 52, hi: 76 },// E3-E5
+  { name: "Alto", lo: 53, hi: 77 },        // F3-F5
+  { name: "Mezzo-soprano", lo: 57, hi: 81 },// A3-A5
+  { name: "Soprano", lo: 60, hi: 84 }      // C4-C6
+];
+function guessVoice(lo, hi) {
+  if (lo == null || hi == null || hi <= lo) return null;
+  var scored = VOICE_TYPES.map(function (v) {
+    var ov = Math.max(0, Math.min(hi, v.hi) - Math.max(lo, v.lo));
+    var span = Math.max(hi, v.hi) - Math.min(lo, v.lo);
+    return { name: v.name, score: ov / span - 0.02 * Math.abs((lo + hi) / 2 - (v.lo + v.hi) / 2) };
+  }).sort(function (a, b) { return b.score - a.score; });
+  return scored[0].name;
+}
+
+if (typeof module !== "undefined" && module.exports) module.exports = { decimate: decimate, yin: yin, noteInfo: noteInfo, analyseSignal: analyseSignal, segmentNotes: segmentNotes, chromaFromSpectrum: chromaFromSpectrum, guessChord: guessChord, guessVoice: guessVoice, midiName: midiName, freqToMidi: freqToMidi };
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var inClaude = !!(window.claude && window.claude.use);
+
+  // ---------- storage (per-viewer convenience only) ----------
+  function load(key, dflt) { try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : dflt; } catch (e) { return dflt; } }
+  function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+
+  // ---------- state ----------
+  var log = load("nl.log", []);          // [{name, cents, hz, sec, src}]
+  var range = load("nl.range", {});      // stepId -> midi
+  var lastClip = null;                   // {notes, chord, file}
+
+  // ---------- notes log ----------
+  function addNote(n, src) {
+    log.push({ name: n.name, midi: n.midi, cents: n.cents, hz: Math.round(n.freq * 10) / 10, sec: Math.round(n.dur * 10) / 10, src: src });
+    if (log.length > 60) log = log.slice(-60);
+    save("nl.log", log); renderLog();
+  }
+  function centsStr(c) { return (c > 0 ? "+" : c < 0 ? "−" : "±") + Math.abs(c) + "¢"; }
+  function renderLog() {
+    var el = $("chips"); el.textContent = "";
+    if (!log.length) { var e = document.createElement("span"); e.className = "empty"; e.textContent = "Held notes show up here."; el.appendChild(e); return; }
+    log.forEach(function (n) {
+      var c = document.createElement("span"); c.className = "chip";
+      var b = document.createElement("b"); b.textContent = n.name; c.appendChild(b);
+      var s = document.createElement("small"); s.textContent = centsStr(n.cents) + " · " + n.sec + "s"; c.appendChild(s);
+      el.appendChild(c);
+    });
+  }
+  function summaryText() {
+    var lines = [];
+    if (log.length) {
+      lines.push("Notes (in order): " + log.map(function (n) { return n.name + " (" + centsStr(n.cents).replace("¢", " cents") + ", " + n.hz + " Hz, " + n.sec + "s)"; }).join(", "));
+      var mids = log.map(function (n) { return n.midi; });
+      lines.push("Lowest: " + midiName(Math.min.apply(null, mids)) + ". Highest: " + midiName(Math.max.apply(null, mids)) + ".");
+    }
+    if (lastClip && lastClip.chord) lines.push("Chord guess from the last clip (approximate): " + lastClip.chord.name + " (strongest notes " + lastClip.chord.notes.join(", ") + ")");
+    var rs = rangeSummary(); if (rs) lines.push(rs);
+    return lines.join("\n") || "No notes yet.";
+  }
+  function payload() {
+    var d = { label: "Notes from Note Listener", reference: "A4 = 440 Hz" };
+    d.notes = log.slice(-40).map(function (n) { return { note: n.name, cents: n.cents, hz: n.hz, seconds: n.sec, from: n.src }; });
+    if (log.length) {
+      var mids = log.map(function (n) { return n.midi; });
+      d.lowest = midiName(Math.min.apply(null, mids)); d.highest = midiName(Math.max.apply(null, mids));
+    }
+    if (lastClip && lastClip.chord) d.chord_guess_last_clip = { chord: lastClip.chord.name, strongest_notes: lastClip.chord.notes, approximate: true };
+    var r = {}; STEPS.forEach(function (s) { if (range[s.id] != null) r[s.id] = midiName(range[s.id]); });
+    if (Object.keys(r).length) { d.range_check = r; var v = voiceGuess(); if (v) d.voice_type_rough_guide = v; }
+    return d;
+  }
+
+  // Send to Claude (only where the page can reach the viewer's Claude)
+  if (inClaude) {
+    window.claude.use("room").then(async function (room) {
+      var can = await (room && room.canSendToClaudeSession ? room.canSendToClaudeSession().catch(function () { return "off"; }) : "off");
+      var btn = $("sendBtn");
+      btn.hidden = can !== "available";
+      var deliver = "userActivation" in MessageEvent.prototype ? "send" : "stage";
+      btn.onclick = function () {
+        $("sendNote").textContent = "";
+        room.sendToClaudeSession(payload(), { deliver: deliver })
+          .then(function () { $("sendNote").textContent = "Check the channel."; })
+          .catch(function () { $("sendNote").textContent = "This may not have reached Claude. Use Copy notes and paste them to Claude."; });
+      };
+    });
+    window.claude.use("downloads").then(function (dl) {
+      if (!dl) return;
+      $("get").hidden = false;
+      $("dlBtn").onclick = function () {
+        $("dlNote").textContent = "Preparing…";
+        fetch("note-listener.html").then(function (r) { if (!r.ok) throw 0; return r.text(); })
+          .then(function (html) { return dl.save({ filename: "note-listener.html", data: html }); })
+          .then(function () { $("dlNote").textContent = "Saved."; })
+          .catch(function (e) { $("dlNote").textContent = e && e.code === "declined" ? "Not saved." : "The copy couldn't be saved here."; });
+      };
+    });
+  } else if (navigator.share) {
+    $("shareBtn").hidden = false;
+    $("shareBtn").onclick = function () { navigator.share({ title: "My notes", text: summaryText() }).catch(function () {}); };
+  }
+
+  $("copyBtn").onclick = function () {
+    var t = summaryText(), box = $("copyBox");
+    var done = function () { $("sendNote").textContent = "Copied. Paste it into your chat with Claude."; };
+    try {
+      navigator.clipboard.writeText(t).then(done, function () { box.hidden = false; box.value = t; box.select(); $("sendNote").textContent = "Select the text below and copy it."; });
+    } catch (e) { box.hidden = false; box.value = t; box.select(); $("sendNote").textContent = "Select the text below and copy it."; }
+  };
+  $("clearBtn").onclick = function () { log = []; save("nl.log", log); renderLog(); $("copyBox").hidden = true; $("sendNote").textContent = ""; };
+
+  // ---------- live listening ----------
+  var live = null; // {ctx, stream, an, chordAn, raf}
+  var tracker = null; // current held note in live mode
+  var recent = [];
+  var stepListening = null; // step id while a range step listens live
+  var stepNotes = [];
+
+  function showNote(info) {
+    var big = $("noteBig");
+    if (!info) { big.classList.add("idle"); return; }
+    big.classList.remove("idle");
+    var letter = info.name.replace(/-?\d+$/, ""), oct = info.name.slice(letter.length);
+    big.textContent = letter; var sub = document.createElement("sub"); sub.textContent = oct; big.appendChild(sub);
+    var ct = $("centsTxt"); ct.textContent = centsStr(info.cents);
+    ct.className = "cents " + (Math.abs(info.cents) <= 5 ? "good" : "off");
+    $("hzTxt").textContent = info.freq.toFixed(1) + " Hz";
+    $("needle").style.left = (50 + Math.max(-50, Math.min(50, info.cents))) + "%";
+  }
+
+  function commitTracker() {
+    if (!tracker) return;
+    var dur = tracker.n * tracker.dt;
+    if (dur >= 0.3) {
+      var avg = tracker.sum / tracker.n, r = Math.round(avg);
+      var n = { midi: r, name: midiName(r), cents: Math.round((avg - r) * 100), freq: 440 * Math.pow(2, (avg - 69) / 12), dur: dur };
+      addNote(n, "live");
+      if (stepListening) { stepNotes.push(n); updateStepLive(); }
+    }
+    tracker = null;
+  }
+
+  function liveFrame(m, dt) {
+    if (m == null) { if (tracker) { tracker.miss++; if (tracker.miss > 6) commitTracker(); } return; }
+    if (tracker && Math.abs(m - tracker.sum / tracker.n) < 0.6) { tracker.sum += m; tracker.n++; tracker.miss = 0; }
+    else { commitTracker(); tracker = { sum: m, n: 1, dt: dt, miss: 0 }; }
+  }
+
+  function setLiveStatus(text, kind) { var s = $("liveStatus"); s.textContent = text; s.dataset.kind = kind || "ok"; }
+
+  function startLive() {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { micBlocked(); return Promise.reject(); }
+    var ctx = new AC(); // created inside the tap so iPhone allows sound processing
+    if (ctx.resume) ctx.resume();
+    return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+      .then(function (stream) {
+        var src = ctx.createMediaStreamSource(stream);
+        var an = ctx.createAnalyser(); an.fftSize = 4096; an.smoothingTimeConstant = 0;
+        src.connect(an);
+        var sr = ctx.sampleRate, k = Math.max(1, Math.floor(sr / 22000)), td = new Float32Array(an.fftSize);
+        var small = new Float32Array(Math.floor(an.fftSize / k)), dt = 1 / 30, last = 0;
+        live = { ctx: ctx, stream: stream, an: an };
+        $("liveBtn").textContent = "Stop listening";
+        setLiveStatus("Listening. Sing or play one note at a time.", "ok");
+        updateStepButtons();
+        function loop(ts) {
+          if (!live) return;
+          live.raf = requestAnimationFrame(loop);
+          if (ts - last < 30) return; last = ts;
+          an.getFloatTimeDomainData(td);
+          var d = decimate(td, sr, 22000).sig;
+          var level = rms(d), m = null, info = null;
+          if (level > 0.01) {
+            var p = yin(d, sr / k, 50, 1600);
+            if (p && p.clarity > 0.85) { m = freqToMidi(p.freq); }
+          }
+          if (m != null) {
+            recent.push(m); if (recent.length > 5) recent.shift();
+            var sorted = recent.slice().sort(function (a, b) { return a - b; }), med = sorted[Math.floor(sorted.length / 2)];
+            info = noteInfo(440 * Math.pow(2, (med - 69) / 12));
+            showNote(info);
+          } else { recent = []; showNote(null); }
+          liveFrame(m, dt);
+        }
+        live.raf = requestAnimationFrame(loop);
+      })
+      .catch(function (err) { try { ctx.close(); } catch (e) {} micBlocked(err); throw err; });
+  }
+  function stopLive() {
+    if (!live) return;
+    cancelAnimationFrame(live.raf);
+    live.stream.getTracks().forEach(function (t) { t.stop(); });
+    try { live.ctx.close(); } catch (e) {}
+    live = null; commitTracker(); showNote(null);
+    $("liveBtn").textContent = "Start listening";
+    setLiveStatus("Stopped. Tap Start to listen again.", "ok");
+    if (stepListening) finishStep();
+    updateStepButtons();
+  }
+  var micDenied = false;
+  function micBlocked(err) {
+    micDenied = true;
+    var name = err && err.name;
+    if (inClaude) setLiveStatus("Live listening is blocked inside this view, so use Read a recording below. On iPhone, Record a clip works right here.", "warn");
+    else if (name === "NotAllowedError") setLiveStatus("The microphone was not allowed. On iPhone open Settings, then Safari, then Microphone, and choose Ask or Allow. On a Mac, check System Settings, Privacy and Security, Microphone.", "warn");
+    else if (!window.isSecureContext) setLiveStatus("The browser only allows the microphone on a secure page (https or localhost). Open the hosted https link instead, or use Read a recording.", "warn");
+    else setLiveStatus("No microphone could be opened. Check that one is connected and selected, or use Read a recording.", "warn");
+    updateStepButtons();
+  }
+  $("liveBtn").onclick = function () { if (live) stopLive(); else startLive().catch(function () {}); };
+
+  // ---------- recordings ----------
+  function decodeFile(file) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return Promise.reject(new Error("no audio"));
+    var ctx = new AC();
+    return file.arrayBuffer().then(function (ab) {
+      return new Promise(function (res, rej) {
+        var p = ctx.decodeAudioData(ab, res, rej);
+        if (p && p.then) p.then(res, rej);
+      });
+    }).then(function (buf) { try { ctx.close(); } catch (e) {} return buf; });
+  }
+  function toMono(buf) {
+    var n = buf.length, out = new Float32Array(n), ch = buf.numberOfChannels;
+    for (var c = 0; c < ch; c++) { var d = buf.getChannelData(c); for (var i = 0; i < n; i++) out[i] += d[i] / ch; }
+    return out;
+  }
+  // radix-2 FFT for the chord guess
+  function fft(re, im) {
+    var n = re.length, i, j = 0, b, len, k, t;
+    for (i = 1; i < n; i++) { b = n >> 1; for (; j & b; b >>= 1) j ^= b; j ^= b; if (i < j) { t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+    for (len = 2; len <= n; len <<= 1) {
+      var ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+      for (i = 0; i < n; i += len) {
+        var cr = 1, ci = 0;
+        for (k = 0; k < len / 2; k++) {
+          var a = i + k, c2 = a + len / 2;
+          var vr = re[c2] * cr - im[c2] * ci, vi = re[c2] * ci + im[c2] * cr;
+          re[c2] = re[a] - vr; im[c2] = im[a] - vi; re[a] += vr; im[a] += vi;
+          t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+        }
+      }
+    }
+  }
+  function clipChord(sig, sr) {
+    var N = 8192, hop = 4096, chroma = new Float32Array(12), frames = 0, win = new Float32Array(N);
+    for (var i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1));
+    var peak = 0; for (i = 0; i < sig.length; i++) peak = Math.max(peak, Math.abs(sig[i]));
+    for (var s = 0; s + N <= sig.length && frames < 120; s += hop) {
+      var seg = sig.subarray(s, s + N); if (rms(seg) < peak * 0.08) continue;
+      var re = new Float64Array(N), im = new Float64Array(N);
+      for (i = 0; i < N; i++) re[i] = seg[i] * win[i];
+      fft(re, im);
+      var mag = new Float32Array(N / 2); for (i = 0; i < N / 2; i++) mag[i] = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
+      var c = chromaFromSpectrum(mag, sr, N); for (i = 0; i < 12; i++) chroma[i] += c[i];
+      frames++;
+    }
+    return frames ? guessChord(chroma) : null;
+  }
+  function analyseFile(file) {
+    return decodeFile(file).then(function (buf) {
+      var sig = toMono(buf), sr = buf.sampleRate;
+      var r = analyseSignal(sig, sr, { minDur: 0.2 });
+      r.chord = clipChord(sig, sr); r.duration = buf.duration;
+      return r;
+    });
+  }
+  function setClipStatus(t, kind) { var s = $("clipStatus"); s.textContent = t; s.dataset.kind = kind || "ok"; }
+
+  function readClip(file) {
+    if (!file) return;
+    setClipStatus("Reading " + (file.name || "your clip") + "…", "ok");
+    analyseFile(file).then(function (r) {
+      lastClip = { notes: r.notes, chord: r.chord };
+      drawTrail(r.frames, r.notes, 352 / 22050);
+      showClipFacts(r, false);
+      r.notes.forEach(function (n) { addNote(n, "clip"); });
+      setClipStatus(r.notes.length ? "Found " + r.notes.length + " held note" + (r.notes.length > 1 ? "s" : "") + " in a " + r.duration.toFixed(1) + " second clip. They're added to Your notes." : "No clear held notes in that clip. Try holding each note a little longer, closer to the phone.", r.notes.length ? "ok" : "warn");
+    }).catch(function () {
+      setClipStatus("That file couldn't be read. Try a Voice Memo (.m4a), or record a clip with the button above.", "warn");
+    });
+  }
+  $("clipRecord").onchange = function (e) { readClip(e.target.files[0]); e.target.value = ""; };
+  $("clipPick").onchange = function (e) { readClip(e.target.files[0]); e.target.value = ""; };
+
+  function showClipFacts(r, example) {
+    var dl = $("clipFacts"); dl.textContent = "";
+    function add(k, v) { var dt = document.createElement("dt"); dt.textContent = k; var dd = document.createElement("dd"); dd.textContent = v; dl.appendChild(dt); dl.appendChild(dd); }
+    if (!r.notes.length) return;
+    var mids = r.notes.map(function (n) { return n.midi; });
+    add(example ? "Example notes" : "Notes", r.notes.map(function (n) { return n.name; }).join(" "));
+    add("Lowest", midiName(Math.min.apply(null, mids)));
+    add("Highest", midiName(Math.max.apply(null, mids)));
+    var longest = r.notes.slice().sort(function (a, b) { return b.dur - a.dur; })[0];
+    add("Longest held", longest.name + " " + centsStr(longest.cents) + ", " + longest.dur.toFixed(1) + "s");
+    if (r.chord) add("If it was one chord", r.chord.name + " (approximate; heard " + r.chord.notes.join(", ") + ")");
+  }
+
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function drawTrail(frames, notes, hop) {
+    var cv = $("trail"), dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 320, h = cv.clientHeight || 150;
+    cv.width = w * dpr; cv.height = h * dpr; var g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    var ms = frames.filter(function (f) { return f.m != null; }).map(function (f) { return f.m; });
+    if (!ms.length) return;
+    var lo = Math.floor(Math.min.apply(null, ms)) - 2, hi = Math.ceil(Math.max.apply(null, ms)) + 2;
+    if (hi - lo < 12) { var mid = (hi + lo) / 2; lo = Math.floor(mid - 6); hi = Math.ceil(mid + 6); }
+    var padL = 34, T = frames.length ? frames[frames.length - 1].t + hop : 1;
+    var y = function (m) { return h - 8 - (m - lo) / (hi - lo) * (h - 16); };
+    var x = function (t) { return padL + t / T * (w - padL - 8); };
+    g.font = "11px " + cssVar("--font-mono"); g.textBaseline = "middle";
+    for (var m = Math.ceil(lo); m <= hi; m++) {
+      var isC = ((m % 12) + 12) % 12 === 0;
+      g.strokeStyle = cssVar("--line"); g.lineWidth = isC ? 1.2 : 0.5; g.globalAlpha = isC ? 1 : 0.6;
+      g.beginPath(); g.moveTo(padL, y(m)); g.lineTo(w - 8, y(m)); g.stroke(); g.globalAlpha = 1;
+      if (isC || hi - lo <= 14) { g.fillStyle = cssVar("--muted"); g.fillText(midiName(m), 2, y(m)); }
+    }
+    // held notes as bars
+    g.fillStyle = cssVar("--accent-soft");
+    notes.forEach(function (n) { g.fillRect(x(n.start), y(n.midi) - 5, Math.max(3, x(n.start + n.dur) - x(n.start)), 10); });
+    // pitch line
+    g.strokeStyle = cssVar("--accent"); g.lineWidth = 2; g.beginPath(); var pen = false;
+    frames.forEach(function (f) { if (f.m == null) { pen = false; return; } if (!pen) { g.moveTo(x(f.t), y(f.m)); pen = true; } else g.lineTo(x(f.t), y(f.m)); });
+    g.stroke();
+  }
+
+  // ---------- range check ----------
+  var STEPS = [
+    { id: "lowest_comfortable", label: "Lowest comfortable note", what: "Slide down to the lowest note that still sounds good and easy. Hold it.", pick: "min" },
+    { id: "lowest_possible", label: "Lowest possible note", what: "Optional. The lowest note you can make at all, even if it's thin. Hold it.", pick: "min" },
+    { id: "highest_comfortable", label: "Highest comfortable note (chest)", what: "The top of where you'd happily sing a whole song in chest voice.", pick: "max" },
+    { id: "highest_chest", label: "Highest chest or mix note", what: "Your money note, the rock top you'd hit once in a show. Belt it and hold it.", pick: "max" },
+    { id: "highest_head", label: "Highest falsetto or head voice", what: "Flip into falsetto or head voice and go as high as you can. Hold it.", pick: "max" }
+  ];
+  var stepClipTarget = null;
+
+  function renderSteps() {
+    var ol = $("steps"); ol.textContent = "";
+    STEPS.forEach(function (s, i) {
+      var li = document.createElement("li"); li.id = "step-" + s.id; if (stepListening === s.id) li.className = "active";
+      var lab = document.createElement("div"); lab.className = "label"; lab.textContent = (i + 1) + ". " + s.label; li.appendChild(lab);
+      var val = document.createElement("div"); val.className = "val" + (range[s.id] == null ? " none" : ""); val.id = "val-" + s.id;
+      val.textContent = range[s.id] == null ? "—" : midiName(range[s.id]); li.appendChild(val);
+      var what = document.createElement("div"); what.className = "what"; what.textContent = s.what; li.appendChild(what);
+      var row = document.createElement("div"); row.className = "row";
+      var b1 = document.createElement("button"); b1.type = "button"; b1.id = "listen-" + s.id;
+      b1.textContent = stepListening === s.id ? "Done" : "Listen live"; if (stepListening === s.id) b1.className = "primary";
+      b1.disabled = (micDenied && stepListening !== s.id) || (stepListening && stepListening !== s.id);
+      b1.onclick = function () { if (stepListening === s.id) { finishStep(); } else { beginStep(s.id); } };
+      var b2 = document.createElement("button"); b2.type = "button"; b2.textContent = "Use a clip"; b2.disabled = !!stepListening;
+      b2.onclick = function () { stepClipTarget = s.id; $("stepClip").click(); };
+      row.appendChild(b1); row.appendChild(b2);
+      if (range[s.id] != null) { var b3 = document.createElement("button"); b3.type = "button"; b3.textContent = "Clear"; b3.onclick = function () { delete range[s.id]; save("nl.range", range); renderSteps(); renderRange(); }; row.appendChild(b3); }
+      li.appendChild(row);
+      ol.appendChild(li);
+    });
+  }
+  function updateStepButtons() { renderSteps(); }
+  function stepPick(id, notes) {
+    var s = STEPS.filter(function (x) { return x.id === id; })[0];
+    var held = notes.filter(function (n) { return n.dur >= 0.3; }); if (!held.length) return null;
+    var mids = held.map(function (n) { return n.midi; });
+    return s.pick === "min" ? Math.min.apply(null, mids) : Math.max.apply(null, mids);
+  }
+  function beginStep(id) {
+    stepListening = id; stepNotes = [];
+    var go = function () { renderSteps(); var v = $("val-" + id); v.textContent = "listening"; v.className = "val none"; };
+    if (live) go(); else startLive().then(go).catch(function () { stepListening = null; renderSteps(); });
+  }
+  function updateStepLive() {
+    if (!stepListening) return; var m = stepPick(stepListening, stepNotes); var v = $("val-" + stepListening);
+    if (v && m != null) { v.textContent = midiName(m); v.className = "val"; }
+  }
+  function finishStep() {
+    commitTracker();
+    var id = stepListening; stepListening = null;
+    var m = stepPick(id, stepNotes); if (m != null) { range[id] = m; save("nl.range", range); }
+    renderSteps(); renderRange();
+  }
+  $("stepClip").onchange = function (e) {
+    var f = e.target.files[0], id = stepClipTarget; e.target.value = ""; if (!f || !id) return;
+    var v = $("val-" + id); v.textContent = "reading"; v.className = "val none";
+    analyseFile(f).then(function (r) {
+      var m = stepPick(id, r.notes);
+      if (m != null) { range[id] = m; save("nl.range", range); }
+      renderSteps(); renderRange();
+      if (m == null) { v = $("val-" + id); v.textContent = "no held note"; }
+    }).catch(function () { renderSteps(); var w = $("val-" + id); w.textContent = "couldn't read"; });
+  };
+  $("rangeClear").onclick = function () { range = {}; save("nl.range", range); if (stepListening) { stepListening = null; } renderSteps(); renderRange(); };
+
+  function span(lo, hi) { var d = hi - lo, o = Math.floor(d / 12), s = d % 12; return (o ? o + " octave" + (o > 1 ? "s" : "") : "") + (o && s ? " and " : "") + (s ? s + " semitone" + (s > 1 ? "s" : "") : "") || "one note"; }
+  function voiceGuess() {
+    var lo = range.lowest_comfortable, hi = range.highest_comfortable;
+    if (lo == null || hi == null) return null; return guessVoice(lo, hi);
+  }
+  function rangeSummary() {
+    var r = range, parts = [];
+    if (r.lowest_comfortable != null && r.highest_comfortable != null) parts.push("Comfortable range " + midiName(r.lowest_comfortable) + " to " + midiName(r.highest_comfortable));
+    var lows = [r.lowest_possible, r.lowest_comfortable].filter(function (x) { return x != null; });
+    var tops = [r.highest_head, r.highest_chest, r.highest_comfortable].filter(function (x) { return x != null; });
+    if (lows.length && tops.length) parts.push("full range " + midiName(Math.min.apply(null, lows)) + " to " + midiName(Math.max.apply(null, tops)));
+    if (r.highest_chest != null) parts.push("chest or mix top " + midiName(r.highest_chest));
+    if (r.highest_head != null) parts.push("falsetto top " + midiName(r.highest_head));
+    var v = voiceGuess(); if (v) parts.push("voice type (rough guide) " + v);
+    return parts.length ? "Range check: " + parts.join("; ") + "." : "";
+  }
+  function renderRange() {
+    var el = $("rangeResult"); el.textContent = "";
+    var r = range, lows = [r.lowest_possible, r.lowest_comfortable].filter(function (x) { return x != null; });
+    var tops = [r.highest_head, r.highest_chest, r.highest_comfortable].filter(function (x) { return x != null; });
+    if (!lows.length || !tops.length) {
+      var p = document.createElement("p"); p.className = "hint"; p.textContent = "Your range appears here after a low step and a high step.";
+      el.appendChild(p); drawKeys(el, null); return;
+    }
+    var lo = Math.min.apply(null, lows), hi = Math.max.apply(null, tops);
+    var big = document.createElement("div"); big.className = "big"; big.textContent = midiName(lo) + " to " + midiName(hi); el.appendChild(big);
+    var s = document.createElement("p"); s.textContent = "Full range: " + span(lo, hi) + "."; el.appendChild(s);
+    if (r.lowest_comfortable != null && r.highest_comfortable != null) {
+      var c = document.createElement("p"); c.textContent = "Comfortable: " + midiName(r.lowest_comfortable) + " to " + midiName(r.highest_comfortable) + " (" + span(r.lowest_comfortable, r.highest_comfortable) + ")."; el.appendChild(c);
+    }
+    var v = voiceGuess();
+    if (v) { var vg = document.createElement("p"); vg.textContent = "Voice type, rough guide only: " + v + ". It's based on your comfortable range; tone and where your voice sits best matter more, so treat it as a starting point."; el.appendChild(vg); }
+    drawKeys(el, { lo: lo, hi: hi, clo: r.lowest_comfortable, chi: r.highest_comfortable });
+  }
+  // keyboard strip E1..C7 with the range shaded
+  function drawKeys(parent, rg) {
+    var cv = document.createElement("canvas"); cv.className = "keys"; cv.setAttribute("aria-hidden", "true"); parent.appendChild(cv);
+    requestAnimationFrame(function () {
+      var dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 320, h = cv.clientHeight || 46;
+      cv.width = w * dpr; cv.height = h * dpr; var g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      var first = 36, last = 96, whites = []; // C2..C7
+      for (var m = first; m <= last; m++) if ([1, 3, 6, 8, 10].indexOf(m % 12) < 0) whites.push(m);
+      var kw = w / whites.length;
+      whites.forEach(function (m, i) {
+        var inR = rg && m >= rg.lo && m <= rg.hi, inC = rg && rg.clo != null && m >= rg.clo && m <= rg.chi;
+        g.fillStyle = inC ? cssVar("--accent") : inR ? cssVar("--accent-soft") : cssVar("--panel");
+        g.fillRect(i * kw, 0, kw - 1, h - 14);
+        g.strokeStyle = cssVar("--line"); g.strokeRect(i * kw + 0.5, 0.5, kw - 1, h - 15);
+        if (m % 12 === 0) { g.fillStyle = cssVar("--muted"); g.font = "10px " + cssVar("--font-mono"); g.fillText(midiName(m), i * kw, h - 2); }
+      });
+    });
+  }
+
+  // ---------- example so the page opens in a working state ----------
+  function exampleClip() {
+    var sr = 22050, seq = [[57, 0.5], [null, 0.12], [60, 0.45], [64, 0.7], [62, 0.35], [null, 0.15], [60, 0.8]];
+    var total = seq.reduce(function (a, s) { return a + s[1]; }, 0), sig = new Float32Array(Math.floor(total * sr)), o = 0, ph = 0;
+    seq.forEach(function (s) {
+      var n = Math.floor(s[1] * sr);
+      for (var i = 0; i < n; i++) {
+        if (s[0] != null) { var f = 440 * Math.pow(2, (s[0] - 69 + 0.25 * Math.sin(2 * Math.PI * 5.5 * i / sr) / 12) / 12); ph += 2 * Math.PI * f / sr; sig[o + i] = 0.5 * Math.sin(ph) + 0.25 * Math.sin(2 * ph) + 0.12 * Math.sin(3 * ph); }
+      }
+      o += n;
+    });
+    var r = analyseSignal(sig, sr); r.chord = null; return r;
+  }
+  try {
+    var ex = exampleClip();
+    requestAnimationFrame(function () { drawTrail(ex.frames, ex.notes, 352 / 22050); showClipFacts(ex, true); });
+  } catch (e) {}
+
+  renderLog(); renderSteps(); renderRange();
+  window.addEventListener("resize", function () { renderRange(); });
+})();
+</script>
+
+</body>
+</html>
