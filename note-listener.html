@@ -107,6 +107,13 @@ ol.steps .row { grid-column: 1 / -1; }
 .keys { width: 100%; height: 46px; display: block; }
 .note-small { font-size: 0.8rem; color: var(--muted); }
 .copybox { width: 100%; min-height: 90px; font-family: var(--font-mono); font-size: 0.8rem; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 10px; }
+h3 { font-family: var(--font-display); font-size: 0.95rem; font-weight: 600; margin: 4px 0 0; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.fields label { display: flex; flex-direction: column; gap: 4px; font-size: 0.88rem; color: var(--muted); font-weight: 600; min-width: 0; }
+.fields input, .fields select { font: inherit; font-size: 16px; font-weight: 500; min-height: 44px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 8px 10px; width: 100%; }
+.fields input:focus-visible, .fields select:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.fields input[aria-invalid="true"] { border-color: var(--warn); }
+.warn-text { color: var(--warn); }
 @media (prefers-reduced-motion: reduce) { .meter .needle { transition: none; } }
 </style>
 
@@ -180,6 +187,44 @@ ol.steps .row { grid-column: 1 / -1; }
     </div>
   </section>
 
+  <!-- KEY HELPER -->
+  <section class="panel" id="keyhelp" aria-labelledby="key-h">
+    <h2 id="key-h">Key helper</h2>
+    <p class="hint">Find the karaoke key that fits your voice. Tell it the song's original key and its lowest and highest notes, then sing the song where it feels comfortable. It tells you how many half steps to shift and which key to buy.</p>
+    <h3>The original song</h3>
+    <div class="fields">
+      <label for="kRoot">Original key
+        <select id="kRoot"></select>
+      </label>
+      <label for="kMode">Major or minor
+        <select id="kMode"><option value="0">Major</option><option value="1">Minor</option></select>
+      </label>
+      <label for="kOrigLo">Song's lowest note
+        <input id="kOrigLo" type="text" placeholder="e.g. G3" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="kNoteHelp">
+      </label>
+      <label for="kOrigHi">Song's highest note
+        <input id="kOrigHi" type="text" placeholder="e.g. D5" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="kNoteHelp">
+      </label>
+    </div>
+    <p class="note-small" id="kNoteHelp">Write notes like G3, Bb2 or F#4. Middle C is C4. Vocal range sites often list a song's lowest and highest sung notes, or play the song and read them with Read a recording above.</p>
+    <h3>How you sang it</h3>
+    <p class="hint">Sing the song, or just its lowest and highest lines, in the key that feels good. Held notes count. You can fix the notes by hand.</p>
+    <div class="row">
+      <button id="kListen" type="button">Sing it live</button>
+      <button id="kClipBtn" type="button">Use a clip</button>
+    </div>
+    <div class="fields">
+      <label for="kSungLo">Your lowest note
+        <input id="kSungLo" type="text" placeholder="—" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      </label>
+      <label for="kSungHi">Your highest note
+        <input id="kSungHi" type="text" placeholder="—" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      </label>
+    </div>
+    <div class="result" id="kResult" aria-live="polite"></div>
+    <div class="row"><button id="kClear" type="button">Clear the key helper</button></div>
+  </section>
+
   <section class="panel" id="get" aria-labelledby="get-h" hidden>
     <h2 id="get-h">Take it with you</h2>
     <p class="hint">Saves a copy of this tool as one file. Open it in Chrome on your Mac to listen live, or follow the Mac setup notes Claude gave you.</p>
@@ -190,6 +235,7 @@ ol.steps .row { grid-column: 1 / -1; }
   <p class="note-small">Pitch: YIN detection on a 22 kHz signal, A4 = 440 Hz. Chord and voice-type readings are rough guides. Everything runs on this device: sound and notes are never uploaded, and your notes and range are saved only in this browser.</p>
 </main>
 
+<input type="file" id="keyClip" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.caf,.mov,.mp4" hidden>
 <input type="file" id="stepClip" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.caf,.mov,.mp4" hidden>
 
 <script>
@@ -359,7 +405,42 @@ function guessVoice(lo, hi) {
   return scored[0].name;
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { decimate: decimate, yin: yin, noteInfo: noteInfo, analyseSignal: analyseSignal, segmentNotes: segmentNotes, chromaFromSpectrum: chromaFromSpectrum, guessChord: guessChord, guessVoice: guessVoice, midiName: midiName, freqToMidi: freqToMidi };
+// ---- Key helper: how far to shift a song, and which key to buy ----
+// Note names like "G3", "Bb2", "f#4", "C♯5" -> MIDI number, or null if it can't be read.
+function parseNote(str) {
+  var t = String(str == null ? "" : str).trim().replace(/♯/g, "#").replace(/♭/g, "b");
+  var mm = /^([A-Ga-g])\s*(#{1,2}|b{1,2}|s)?\s*(-?\d)$/.exec(t);
+  if (!mm) return null;
+  var base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[mm[1].toUpperCase()];
+  var acc = mm[2] || "", shift = acc === "s" ? 1 : acc.charAt(0) === "#" ? acc.length : acc.charAt(0) === "b" ? -acc.length : 0;
+  var midi = (parseInt(mm[3], 10) + 1) * 12 + base + shift;
+  return midi >= 12 && midi <= 120 ? midi : null;
+}
+// Usual spellings: major keys use flats except F# and B; minor keys use sharps except Eb m and Bb m.
+var MAJOR_KEYS = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+var MINOR_KEYS = ["Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"];
+function keyName(pc, minor) { return (minor ? MINOR_KEYS : MAJOR_KEYS)[((pc % 12) + 12) % 12]; }
+// Half steps from the song's original melody range to where you sang it.
+// Uses the average of the low-note and high-note moves; flags when they disagree.
+function keyShift(origLo, origHi, sungLo, sungHi) {
+  if ([origLo, origHi, sungLo, sungHi].some(function (x) { return x == null || isNaN(x); })) return null;
+  var dLo = sungLo - origLo, dHi = sungHi - origHi;
+  return { shift: Math.round((dLo + dHi) / 2), lowMove: dLo, highMove: dHi, mismatch: Math.abs(dLo - dHi) };
+}
+// Shift that puts a song's range in the middle of a comfortable range, and whether it fits.
+function fitShift(origLo, origHi, comfLo, comfHi) {
+  if ([origLo, origHi, comfLo, comfHi].some(function (x) { return x == null || isNaN(x); })) return null;
+  var s = Math.round(((comfLo + comfHi) - (origLo + origHi)) / 2);
+  return { shift: s, fits: origLo + s >= comfLo && origHi + s <= comfHi, over: Math.max(0, (origHi - origLo) - (comfHi - comfLo)) };
+}
+// Turns a raw shift into karaoke advice. Track key changes go up to 6 half steps either way,
+// so a bigger move becomes the same key with an octave jump (e.g. +9 = -3, sung an octave up).
+function keyAdvice(rootPc, minor, shift) {
+  var track = ((shift % 12) + 12) % 12; if (track > 6) track -= 12;
+  return { shift: shift, track: track, octaves: Math.round((shift - track) / 12), from: keyName(rootPc, minor), to: keyName(rootPc + shift, minor) };
+}
+
+if (typeof module !== "undefined" && module.exports) module.exports = { decimate: decimate, yin: yin, noteInfo: noteInfo, analyseSignal: analyseSignal, segmentNotes: segmentNotes, chromaFromSpectrum: chromaFromSpectrum, guessChord: guessChord, guessVoice: guessVoice, midiName: midiName, freqToMidi: freqToMidi, parseNote: parseNote, keyName: keyName, keyShift: keyShift, fitShift: fitShift, keyAdvice: keyAdvice };
 
 (function () {
   var $ = function (id) { return document.getElementById(id); };
@@ -400,6 +481,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
     }
     if (lastClip && lastClip.chord) lines.push("Chord guess from the last clip (approximate): " + lastClip.chord.name + " (strongest notes " + lastClip.chord.notes.join(", ") + ")");
     var rs = rangeSummary(); if (rs) lines.push(rs);
+    var ks = keySummary(); if (ks) lines.push(ks.text);
     return lines.join("\n") || "No notes yet.";
   }
   function payload() {
@@ -412,6 +494,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
     if (lastClip && lastClip.chord) d.chord_guess_last_clip = { chord: lastClip.chord.name, strongest_notes: lastClip.chord.notes, approximate: true };
     var r = {}; STEPS.forEach(function (s) { if (range[s.id] != null) r[s.id] = midiName(range[s.id]); });
     if (Object.keys(r).length) { d.range_check = r; var v = voiceGuess(); if (v) d.voice_type_rough_guide = v; }
+    var ks = keySummary(); if (ks) d.key_helper = ks.data;
     return d;
   }
 
@@ -460,6 +543,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
   var recent = [];
   var stepListening = null; // step id while a range step listens live
   var stepNotes = [];
+  var keyListening = false, keyStartedLive = false; // key helper capturing a sung song
+  var keyNotes = [];
 
   function showNote(info) {
     var big = $("noteBig");
@@ -481,6 +566,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
       var n = { midi: r, name: midiName(r), cents: Math.round((avg - r) * 100), freq: 440 * Math.pow(2, (avg - 69) / 12), dur: dur };
       addNote(n, "live");
       if (stepListening) { stepNotes.push(n); updateStepLive(); }
+      if (keyListening) { keyNotes.push(n); keyFromNotes(keyNotes); }
     }
     tracker = null;
   }
@@ -541,6 +627,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
     $("liveBtn").textContent = "Start listening";
     setLiveStatus("Stopped. Tap Start to listen again.", "ok");
     if (stepListening) finishStep();
+    if (keyListening) finishKey(false);
     updateStepButtons();
   }
   var micDenied = false;
@@ -710,6 +797,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
     return s.pick === "min" ? Math.min.apply(null, mids) : Math.max.apply(null, mids);
   }
   function beginStep(id) {
+    if (keyListening) finishKey(false);
     stepListening = id; stepNotes = [];
     var go = function () { renderSteps(); var v = $("val-" + id); v.textContent = "listening"; v.className = "val none"; };
     if (live) go(); else startLive().then(go).catch(function () { stepListening = null; renderSteps(); });
@@ -722,7 +810,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
     commitTracker();
     var id = stepListening; stepListening = null;
     var m = stepPick(id, stepNotes); if (m != null) { range[id] = m; save("nl.range", range); }
-    renderSteps(); renderRange();
+    renderSteps(); renderRange(); renderKey();
   }
   $("stepClip").onchange = function (e) {
     var f = e.target.files[0], id = stepClipTarget; e.target.value = ""; if (!f || !id) return;
@@ -734,7 +822,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
       if (m == null) { v = $("val-" + id); v.textContent = "no held note"; }
     }).catch(function () { renderSteps(); var w = $("val-" + id); w.textContent = "couldn't read"; });
   };
-  $("rangeClear").onclick = function () { range = {}; save("nl.range", range); if (stepListening) { stepListening = null; } renderSteps(); renderRange(); };
+  $("rangeClear").onclick = function () { range = {}; save("nl.range", range); if (stepListening) { stepListening = null; } renderSteps(); renderRange(); renderKey(); };
 
   function span(lo, hi) { var d = hi - lo, o = Math.floor(d / 12), s = d % 12; return (o ? o + " octave" + (o > 1 ? "s" : "") : "") + (o && s ? " and " : "") + (s ? s + " semitone" + (s > 1 ? "s" : "") : "") || "one note"; }
   function voiceGuess() {
@@ -789,6 +877,120 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
     });
   }
 
+  // ---------- key helper ----------
+  var KEY_ROOTS = ["C", "C# / Db", "D", "Eb / D#", "E", "F", "F# / Gb", "G", "Ab / G#", "A", "Bb / A#", "B"];
+  var kState = load("nl.keyhelper", { root: 0, mode: 0, origLo: "", origHi: "", sungLo: "", sungHi: "" });
+  (function initKey() {
+    var sel = $("kRoot");
+    KEY_ROOTS.forEach(function (k, i) { var o = document.createElement("option"); o.value = i; o.textContent = k; sel.appendChild(o); });
+    sel.value = kState.root; $("kMode").value = kState.mode;
+    ["origLo", "origHi", "sungLo", "sungHi"].forEach(function (f) { $(kId(f)).value = kState[f] || ""; });
+    ["kRoot", "kMode", "kOrigLo", "kOrigHi", "kSungLo", "kSungHi"].forEach(function (id) { $(id).addEventListener("input", readKeyForm); });
+  })();
+  function kId(f) { return "k" + f.charAt(0).toUpperCase() + f.slice(1); }
+  function readKeyForm() {
+    kState = { root: +$("kRoot").value, mode: +$("kMode").value, origLo: $("kOrigLo").value, origHi: $("kOrigHi").value, sungLo: $("kSungLo").value, sungHi: $("kSungHi").value };
+    save("nl.keyhelper", kState); renderKey();
+  }
+  function halfSteps(n) { n = Math.abs(n); return n + " half step" + (n === 1 ? "" : "s"); }
+  function signed(n) { return n > 0 ? "+" + n : n < 0 ? "−" + Math.abs(n) : "0"; }
+  // Works out the answer from the form. res.shift stays undefined when there isn't enough to go on.
+  function keyCalc() {
+    var st = kState, res = { errors: [] };
+    function note(f) {
+      var t = (st[f] || "").trim(), m = t ? parseNote(t) : null;
+      $(kId(f)).setAttribute("aria-invalid", t && m == null ? "true" : "false");
+      if (t && m == null) res.errors.push("“" + t + "” isn't a note name. Write it like G3, Bb2 or F#4.");
+      return m;
+    }
+    var oLo = note("origLo"), oHi = note("origHi"), sLo = note("sungLo"), sHi = note("sungHi");
+    if (oLo != null && oHi != null && oHi <= oLo) res.errors.push("The song's highest note needs to be above its lowest note.");
+    if (sLo != null && sHi != null && sHi < sLo) res.errors.push("Your highest note needs to be at or above your lowest note.");
+    if (res.errors.length || oLo == null || oHi == null) return res;
+    res.oLo = oLo; res.oHi = oHi;
+    if (sLo != null && sHi != null) { var k = keyShift(oLo, oHi, sLo, sHi); res.shift = k.shift; res.basis = "sung"; res.k = k; }
+    else if (range.lowest_comfortable != null && range.highest_comfortable != null) {
+      var f = fitShift(oLo, oHi, range.lowest_comfortable, range.highest_comfortable); res.shift = f.shift; res.basis = "range"; res.fit = f;
+    } else return res;
+    res.adv = keyAdvice(st.root, st.mode === 1, res.shift);
+    return res;
+  }
+  function renderKey() {
+    var el = $("kResult"); el.textContent = "";
+    function p(text, cls) { var e = document.createElement("p"); if (cls) e.className = cls; e.textContent = text; el.appendChild(e); return e; }
+    var r = keyCalc();
+    r.errors.forEach(function (t) { p(t, "warn-text"); });
+    if (r.errors.length) return;
+    if (r.shift == null) {
+      p(r.oLo == null ? "Fill in the original key and the song's lowest and highest notes, then sing it." : "Now sing the song with Sing it live or Use a clip, or type the lowest and highest notes you sang. The Range check above also gives a first guess.", "hint");
+      return;
+    }
+    var a = r.adv, big = document.createElement("div"); big.className = "big";
+    big.textContent = a.shift === 0 ? "Keep the original key" : "Shift " + (a.shift < 0 ? "down " : "up ") + halfSteps(a.shift);
+    el.appendChild(big);
+    if (r.basis === "range") p("First guess from your Range check. Sing the song to confirm.", "hint");
+    if (a.track === 0 && a.octaves === 0) p("Buy the karaoke track in " + a.to + ", the original key, with no key change.");
+    else p("Buy the karaoke track in " + a.to + " (the original is " + a.from + "). On shops that list key changes, that's " + signed(a.track) + ".");
+    if (a.octaves !== 0) {
+      p("That's more than a karaoke key change covers, so the track plays the " + a.to + " version and you sing " + (Math.abs(a.octaves) === 1 ? "an octave" : Math.abs(a.octaves) + " octaves") + " " + (a.octaves < 0 ? "lower" : "higher") + " than the recorded singer.");
+    }
+    p("Your version runs " + midiName(r.oLo + a.shift) + " to " + midiName(r.oHi + a.shift) + " (the original runs " + midiName(r.oLo) + " to " + midiName(r.oHi) + ").");
+    if (r.basis === "sung" && r.k.mismatch >= 2) {
+      p("Your low note moved " + signed(r.k.lowMove) + " and your high note moved " + signed(r.k.highMove) + " half steps, so they don't agree. Check that you reached the song's lowest and highest notes, or fix the notes above. This answer uses the middle.", "warn-text");
+    }
+    if (r.basis === "range" && !r.fit.fits) {
+      p(r.fit.over > 0 ? "The song spans " + halfSteps(r.fit.over) + " more than your comfortable range, so some notes will sit outside it in any key." : "Part of the song sits outside your comfortable range.", "warn-text");
+    }
+    if (r.basis === "sung" && range.lowest_comfortable != null && range.highest_comfortable != null) {
+      var lo = r.oLo + a.shift, hi = r.oHi + a.shift;
+      if (lo >= range.lowest_comfortable && hi <= range.highest_comfortable) p("That fits inside your comfortable range from the Range check.", "hint");
+      else if (hi > range.highest_comfortable) p("The top note is " + halfSteps(hi - range.highest_comfortable) + " above your comfortable top from the Range check.", "hint");
+      else p("The bottom note is " + halfSteps(range.lowest_comfortable - lo) + " below your comfortable bottom from the Range check.", "hint");
+    }
+  }
+  function keySummary() {
+    var r = keyCalc(); if (r.shift == null || r.errors.length) return null;
+    var a = r.adv;
+    var text = "Key helper: original key " + a.from + " (melody " + midiName(r.oLo) + " to " + midiName(r.oHi) + "). Shift " + signed(a.shift) + " half steps" + (r.basis === "range" ? " (guess from range check)" : "") + ". Karaoke track key " + a.to + " (" + signed(a.track) + (a.octaves ? ", sung " + (a.octaves < 0 ? "an octave lower" : "an octave higher") : "") + ").";
+    return { text: text, data: { original_key: a.from, song_range: midiName(r.oLo) + "-" + midiName(r.oHi), shift_half_steps: a.shift, karaoke_track_key: a.to, track_key_change: a.track, octave_jump: a.octaves, based_on: r.basis === "sung" ? "sung version" : "range check" } };
+  }
+  function keyFromNotes(notes) {
+    var held = notes.filter(function (n) { return n.dur >= 0.3; }); if (!held.length) return false;
+    var mids = held.map(function (n) { return n.midi; });
+    $("kSungLo").value = midiName(Math.min.apply(null, mids)); $("kSungHi").value = midiName(Math.max.apply(null, mids));
+    readKeyForm(); return true;
+  }
+  function renderKeyButtons() {
+    var b = $("kListen"); b.textContent = keyListening ? "Done singing" : "Sing it live"; b.className = keyListening ? "primary" : "";
+    $("kClipBtn").disabled = keyListening;
+  }
+  function finishKey(stopMic) {
+    commitTracker(); keyListening = false;
+    if (stopMic && keyStartedLive && live) { keyStartedLive = false; stopLive(); }
+    keyStartedLive = false; renderKeyButtons();
+  }
+  $("kListen").onclick = function () {
+    if (keyListening) { finishKey(true); return; }
+    if (stepListening) finishStep();
+    keyNotes = [];
+    var go = function () { keyListening = true; renderKeyButtons(); };
+    if (live) go(); else startLive().then(function () { keyStartedLive = true; go(); }).catch(function () {});
+  };
+  $("kClipBtn").onclick = function () { $("keyClip").click(); };
+  function keyClipProblem(text) { renderKey(); var q = document.createElement("p"); q.className = "warn-text"; q.textContent = text; $("kResult").prepend(q); }
+  $("keyClip").onchange = function (e) {
+    var f = e.target.files[0]; e.target.value = ""; if (!f) return;
+    var el = $("kResult"); el.textContent = ""; var w = document.createElement("p"); w.className = "hint"; w.textContent = "Reading " + (f.name || "your clip") + "…"; el.appendChild(w);
+    analyseFile(f).then(function (r) {
+      if (!keyFromNotes(r.notes)) keyClipProblem("No clear held notes in that clip. Hold the notes a little longer, closer to the phone.");
+    }).catch(function () { keyClipProblem("That file couldn't be read. Try a Voice Memo (.m4a)."); });
+  };
+  $("kClear").onclick = function () {
+    if (keyListening) finishKey(true);
+    ["kOrigLo", "kOrigHi", "kSungLo", "kSungHi"].forEach(function (id) { $(id).value = ""; });
+    $("kRoot").value = 0; $("kMode").value = 0; readKeyForm();
+  };
+
   // ---------- example so the page opens in a working state ----------
   function exampleClip() {
     var sr = 22050, seq = [[57, 0.5], [null, 0.12], [60, 0.45], [64, 0.7], [62, 0.35], [null, 0.15], [60, 0.8]];
@@ -807,7 +1009,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { decimate
     requestAnimationFrame(function () { drawTrail(ex.frames, ex.notes, 352 / 22050); showClipFacts(ex, true); });
   } catch (e) {}
 
-  renderLog(); renderSteps(); renderRange();
+  renderLog(); renderSteps(); renderRange(); renderKey(); renderKeyButtons();
   window.addEventListener("resize", function () { renderRange(); });
 })();
 </script>

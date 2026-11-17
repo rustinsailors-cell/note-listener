@@ -164,4 +164,39 @@ function guessVoice(lo, hi) {
   return scored[0].name;
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { decimate: decimate, yin: yin, noteInfo: noteInfo, analyseSignal: analyseSignal, segmentNotes: segmentNotes, chromaFromSpectrum: chromaFromSpectrum, guessChord: guessChord, guessVoice: guessVoice, midiName: midiName, freqToMidi: freqToMidi };
+// ---- Key helper: how far to shift a song, and which key to buy ----
+// Note names like "G3", "Bb2", "f#4", "C♯5" -> MIDI number, or null if it can't be read.
+function parseNote(str) {
+  var t = String(str == null ? "" : str).trim().replace(/♯/g, "#").replace(/♭/g, "b");
+  var mm = /^([A-Ga-g])\s*(#{1,2}|b{1,2}|s)?\s*(-?\d)$/.exec(t);
+  if (!mm) return null;
+  var base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[mm[1].toUpperCase()];
+  var acc = mm[2] || "", shift = acc === "s" ? 1 : acc.charAt(0) === "#" ? acc.length : acc.charAt(0) === "b" ? -acc.length : 0;
+  var midi = (parseInt(mm[3], 10) + 1) * 12 + base + shift;
+  return midi >= 12 && midi <= 120 ? midi : null;
+}
+// Usual spellings: major keys use flats except F# and B; minor keys use sharps except Eb m and Bb m.
+var MAJOR_KEYS = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+var MINOR_KEYS = ["Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"];
+function keyName(pc, minor) { return (minor ? MINOR_KEYS : MAJOR_KEYS)[((pc % 12) + 12) % 12]; }
+// Half steps from the song's original melody range to where you sang it.
+// Uses the average of the low-note and high-note moves; flags when they disagree.
+function keyShift(origLo, origHi, sungLo, sungHi) {
+  if ([origLo, origHi, sungLo, sungHi].some(function (x) { return x == null || isNaN(x); })) return null;
+  var dLo = sungLo - origLo, dHi = sungHi - origHi;
+  return { shift: Math.round((dLo + dHi) / 2), lowMove: dLo, highMove: dHi, mismatch: Math.abs(dLo - dHi) };
+}
+// Shift that puts a song's range in the middle of a comfortable range, and whether it fits.
+function fitShift(origLo, origHi, comfLo, comfHi) {
+  if ([origLo, origHi, comfLo, comfHi].some(function (x) { return x == null || isNaN(x); })) return null;
+  var s = Math.round(((comfLo + comfHi) - (origLo + origHi)) / 2);
+  return { shift: s, fits: origLo + s >= comfLo && origHi + s <= comfHi, over: Math.max(0, (origHi - origLo) - (comfHi - comfLo)) };
+}
+// Turns a raw shift into karaoke advice. Track key changes go up to 6 half steps either way,
+// so a bigger move becomes the same key with an octave jump (e.g. +9 = -3, sung an octave up).
+function keyAdvice(rootPc, minor, shift) {
+  var track = ((shift % 12) + 12) % 12; if (track > 6) track -= 12;
+  return { shift: shift, track: track, octaves: Math.round((shift - track) / 12), from: keyName(rootPc, minor), to: keyName(rootPc + shift, minor) };
+}
+
+if (typeof module !== "undefined" && module.exports) module.exports = { decimate: decimate, yin: yin, noteInfo: noteInfo, analyseSignal: analyseSignal, segmentNotes: segmentNotes, chromaFromSpectrum: chromaFromSpectrum, guessChord: guessChord, guessVoice: guessVoice, midiName: midiName, freqToMidi: freqToMidi, parseNote: parseNote, keyName: keyName, keyShift: keyShift, fitShift: fitShift, keyAdvice: keyAdvice };

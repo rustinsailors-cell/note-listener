@@ -33,3 +33,21 @@ for (const SR of [44100, 48000]) {
   console.log(SR, out.join('  '));
 }
 let t0=Date.now(); const big=new Float32Array(48000*30); for(let i=0;i<big.length;i++) big[i]=0.5*Math.sin(2*Math.PI*220*i/48000); P.analyseSignal(big,48000); console.log('30s clip ms', Date.now()-t0);
+// ---- key helper ----
+const assert = require('assert');
+assert.strictEqual(P.parseNote('A4'), 69); assert.strictEqual(P.parseNote('c4'), 60);
+assert.strictEqual(P.parseNote('Bb2'), 46); assert.strictEqual(P.parseNote('F#3'), 54);
+assert.strictEqual(P.parseNote('C♯5'), 73); assert.strictEqual(P.parseNote('Cb4'), 59);
+assert.strictEqual(P.parseNote('H4'), null); assert.strictEqual(P.parseNote(''), null);
+assert.strictEqual(P.keyName(10, false), 'Bb'); assert.strictEqual(P.keyName(6, true), 'F#m');
+// song G3..D5 in G major, sung C3..G4 -> down 7
+let k = P.keyShift(P.parseNote('G3'), P.parseNote('D5'), P.parseNote('C3'), P.parseNote('G4'));
+assert.strictEqual(k.shift, -7); assert.strictEqual(k.mismatch, 0);
+let a = P.keyAdvice(7, false, k.shift);
+assert.deepStrictEqual([a.to, a.track, a.octaves], ['C', 5, -1]); // C = up 5 on the track, sung an octave lower
+a = P.keyAdvice(9, true, -3); assert.deepStrictEqual([a.from, a.to, a.track, a.octaves], ['Am', 'F#m', -3, 0]);
+a = P.keyAdvice(0, false, 9); assert.deepStrictEqual([a.to, a.track, a.octaves], ['A', -3, 1]);
+a = P.keyAdvice(4, false, 6); assert.deepStrictEqual([a.to, a.track], ['Bb', 6]);
+let f2 = P.fitShift(P.parseNote('A3'), P.parseNote('E5'), P.parseNote('C3'), P.parseNote('G4'));
+assert.strictEqual(f2.shift, -9); assert.strictEqual(f2.fits, true);
+console.log('key helper tests passed');
